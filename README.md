@@ -1,5 +1,5 @@
-# CommonLibVR Template Plugin
-A simple template plugin to use as a starting point for making CommonLibVR based SKSE plugins
+# Settlement Builder and Placer VR
+DLL companion to do per frame updates for Skyrim Settlement Builder and Placer VR
 
 ## Requirements
 * [CMake](https://cmake.org/)
@@ -9,8 +9,7 @@ A simple template plugin to use as a starting point for making CommonLibVR based
 	* Add the environment variable `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
 * [Visual Studio Community 2022](https://visualstudio.microsoft.com/)
 	* Desktop development with C++
-* [CommonLibVR](https://github.com/RafearTheModder/CommonLibVR/tree/vr)
-	* You need to build from the RafearTheModder/vr branch (will switch to alandtse/vr if and when changes are upstreamed)
+* [CommonLibVR](https://github.com/alandtse/CommonLibVR)
 	* Add this as as an environment variable `CommonLibVRPath`
 
 ## User Requirements
