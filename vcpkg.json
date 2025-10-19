@@ -1,0 +1,15 @@
+{
+  "name": "settlement-builder-place-vr",
+  "version-string": "0.0.1",
+  "description": "A simple template plugin to use as a starting point for making CommonLibVR based SKSE plugins",
+  "homepage": "N/A",
+  "license": "MIT",
+  "dependencies": [
+    "boost-atomic",
+    "boost-stl-interfaces",
+    "rsm-binary-io",
+    "clib-util",
+    "spdlog"
+  ],
+  "builtin-baseline": "dc025b51f5fbf019fb0d143f8c753425ab72a4b0"
+}
