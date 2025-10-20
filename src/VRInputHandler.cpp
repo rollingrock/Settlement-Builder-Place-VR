@@ -1,6 +1,13 @@
 #include "VRInputHandler.h"
 #include "SKSE/SKSE.h"
 
+constexpr int DEVICE_VR_RIGHT = 5;         
+constexpr int DEVICE_VR_LEFT = 6;          
+constexpr int BUTTON_LEFT_TRIGGER = 33;   
+constexpr int BUTTON_RIGHT_TRIGGER = 33;  
+constexpr int BUTTON_A = 7;              
+
+
 VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*)
 {
     for (auto input = *a_event; input; input = input->next) {
@@ -13,14 +20,34 @@ VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* 
             //    button->GetIDCode(),
             //    button->Value(),
             //    button->HeldDuration(),
-            //    button->IsDown()
+            //    button->IsHeld()
             //);
 
-			// Update isPressed status for a specific button (example: IDCode 1)
-			isPressed = isPressed || ((button->device.underlying() == 5) && (button->GetIDCode() == 33) && button->IsPressed());  // Right Hander Trigger
+			if (button->device.underlying() == DEVICE_VR_LEFT && button->GetIDCode() == BUTTON_LEFT_TRIGGER && button->IsHeld()) {
+				leftTriggerPressed = true;
+			}
+			if (button->device.underlying() == DEVICE_VR_RIGHT && button->GetIDCode() == BUTTON_RIGHT_TRIGGER && button->IsHeld()) {
+				rightTriggerPressed = true;
+			}
+			if (button->device.underlying() == DEVICE_VR_RIGHT && button->GetIDCode() == BUTTON_A && button->IsHeld()) {
+				aButtonPressed = true;
+			}
         }
+		// Detect thumbstick event for right wand
+		else if (input->eventType == RE::INPUT_EVENT_TYPE::kThumbstick) {
+			auto thumb = static_cast<RE::ThumbstickEvent*>(input);
+			if (thumb->device.underlying() == DEVICE_VR_RIGHT) {
+				rightJoystickY = thumb->yValue;  
+			//	logger::info("[VRInputLogger] Right Joystick Y Value: {}", thumb->yValue);
+			}
+		}
     }
     return RE::BSEventNotifyControl::kContinue;
+}
+
+float VRInputHandler::GetRightJoystickY() const
+{
+	return rightJoystickY;
 }
 
 void VRInputHandler::Register()
@@ -29,9 +56,9 @@ void VRInputHandler::Register()
     auto inputMgr = RE::BSInputDeviceManager::GetSingleton();
     if (inputMgr) {
         inputMgr->AddEventSink<RE::InputEvent*>(GetSingleton());
-        logger::info("[VRInputLogger] Registered input event sink.");
+        logger::info("[VRInputHandler] Registered input event sink.");
     } else {
-        logger::error("[VRInputLogger] Failed to get input manager singleton.");
+        logger::error("[VRInputHandler] Failed to get input manager singleton.");
     }
 }
 
@@ -40,9 +67,32 @@ void VRInputHandler::UnRegister()
     auto inputMgr = RE::BSInputDeviceManager::GetSingleton();
     if (inputMgr) {
         inputMgr->RemoveEventSink(GetSingleton());
-        logger::info("[VRInputLogger] Unregistered input event sink.");
+        logger::info("[VRInputHandler] Unregistered input event sink.");
     } else {
-        logger::error("[VRInputLogger] Failed to get input manager singleton.");
+        logger::error("[VRInputHandler] Failed to get input manager singleton.");
     }
+	GetSingleton()->Reset();
 }
 
+void VRInputHandler::Reset()
+{
+	leftTriggerPressed = false;
+	rightTriggerPressed = false;
+	aButtonPressed = false;
+	rightJoystickY = 0.0f;
+}
+
+bool VRInputHandler::IsLeftTriggerPressed() const
+{
+	return leftTriggerPressed;
+}
+
+bool VRInputHandler::IsRightTriggerPressed() const
+{
+	return rightTriggerPressed;
+}
+
+bool VRInputHandler::IsAButtonPressed() const
+{
+	return aButtonPressed;
+}

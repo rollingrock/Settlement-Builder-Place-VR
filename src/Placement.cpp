@@ -2,19 +2,21 @@
 #include "RE/Skyrim.h"
 #include "SKSE/SKSE.h"
 #include "VRInputHandler.h"
+#include "InputBlocker.h"
 
 namespace Placement
 {
     static PlacementState g_state;
+	constexpr float DISTANCE_STEP = 2.0f;  // units per frame per full axis
 
-	inline void SendModEvent(std::string_view eventName, std::string_view strArg = "", float numArg = 0.0f, RE::TESForm* sender = nullptr)
+	static void SendModEvent(std::string_view eventName, std::string_view strArg = "", float numArg = 0.0f, RE::TESForm* sender = nullptr)
 	{
 		// BSFixedString can be built from const char*
 		SKSE::ModCallbackEvent e{ eventName.data(), strArg.data(), numArg, sender };
 		SKSE::GetModCallbackEventSource()->SendEvent(&e);
 	}
 
-	inline float NormalizeAngle(float a)
+	static float NormalizeAngle(float a)
 	{
 		float d = (a * 180.0f) / std::numbers::pi_v<float>;
 		while (d >= 360.0f) d -= 360.0f;
@@ -37,28 +39,42 @@ namespace Placement
             if (!g_state.active || !g_state.placedRef)
                 return RE::BSEventNotifyControl::kContinue;
 
-            // Per-frame logic here (update preview, check input)
-            auto player = RE::PlayerCharacter::GetSingleton();
-            if (!player)
-                return RE::BSEventNotifyControl::kContinue;
+            auto input = VRInputHandler::GetSingleton();
 
-			LivePlace(g_state.placedRef);
+            // Adjust yaw with triggers
+            constexpr float yawStep = 2.5f * std::numbers::pi_v<float> / 180.0f; // 2.5 degrees in radians
+            if (input->IsLeftTriggerPressed()) {
+                g_state.previewYaw -= yawStep;
+            }
+            if (input->IsRightTriggerPressed()) {
+                g_state.previewYaw += yawStep;
+            }
 
-            if (VRInputHandler::GetSingleton()->IsPressed()) {
-                // Finalize placement
+            // Adjust distance with right joystick Y
+            float joyY = input->GetRightJoystickY();
+            if (std::abs(joyY) > 0.1f) { // Deadzone
+                g_state.previewDistance += joyY * DISTANCE_STEP;
+                g_state.previewDistance = std::clamp(g_state.previewDistance, 50.0f, 1000.0f); // Clamp to reasonable range
+            }
+
+            // Update preview position and rotation
+            LivePlace(g_state.placedRef, g_state.previewYaw, g_state.previewDistance);
+
+            // Confirm placement with "A" button
+            if (input->IsAButtonPressed()) {
                 g_state.placedRef->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true);
                 RE::DebugNotification("Item Placed");
                 g_state.active = false;
-				g_state.placedRef = nullptr;
-				g_state.hasBaseline = false;
-                OnPlacementConfirmed(); // Notify Papyrus
+                g_state.placedRef = nullptr;
+                OnPlacementConfirmed();
             }
 
+			input->Reset();
 
             return RE::BSEventNotifyControl::kContinue;
         }
 
-		void LivePlace(RE::TESObjectREFR* a_refr) {
+		void LivePlace(RE::TESObjectREFR* a_refr, float yaw, float distance) {
 			auto player = RE::PlayerCharacter::GetSingleton();
 			if (!player || !player->RightWandNode) return;
 
@@ -70,32 +86,14 @@ namespace Placement
 			const auto& wandPos = wandTransform.translate;
 
 			// The forward direction of the wand in world space
-			// In Skyrim, forward is usually the -Z axis in local space
 			RE::NiPoint3 localForward{ 0.0f, 0.0f, -1.0f };
 			RE::NiPoint3 worldForward = wandTransform.rotate * localForward;
 
-			// Calculate the target position 100 units in front of the wand
-			float distance = 220.0f;
 			RE::NiPoint3 targetPos = wandPos + (worldForward * distance);
 
-			// Convert the wand's rotation matrix to Euler angles (in radians)
-			// Skyrim's SetAngle expects angles in radians
-			float pitch, yaw, roll;
-			// Extract Euler angles from the rotation matrix
-			// Assuming the matrix is in row-major order:
-			// yaw   (Z) = atan2(m10, m00)
-			// pitch (Y) = atan2(-m20, sqrt(m21^2 + m22^2))
-			// roll  (X) = atan2(m21, m22)
-			const auto& m = wandTransform.rotate;
-			yaw   = std::atan2(m.entry[1][0], m.entry[0][0]);
-			pitch = std::atan2(-m.entry[2][0], std::sqrt(m.entry[2][1] * m.entry[2][1] + m.entry[2][2] * m.entry[2][2]));
-			roll  = std::atan2(m.entry[2][1], m.entry[2][2]);
-
-			yaw = player->GetAngleZ();
-
-			SKSE::GetTaskInterface()->AddTask([a_refr, targetPos, pitch, roll, yaw] {
+			SKSE::GetTaskInterface()->AddTask([a_refr, targetPos, yaw] {
 				a_refr->SetPosition(targetPos);
-				a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, NormalizeAngle(yaw) });  // X=roll, Y=pitch, Z=yaw
+				a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, yaw });
 				a_refr->Update3DPosition(true);
 			});
 		}
@@ -108,9 +106,7 @@ namespace Placement
 
         g_state.placedRef = placedRef;
         g_state.active = true;
-		g_state.hasBaseline = false;
-
-        // Set up preview state, etc.
+        g_state.previewYaw = 0.0f; 
 
         // Register for per-frame updates (using MenuOpenCloseEvent as a simple per-frame hook)
         auto ui = RE::UI::GetSingleton();
@@ -118,6 +114,7 @@ namespace Placement
             ui->AddEventSink<RE::MenuOpenCloseEvent>(PlacementUpdateHandler::GetSingleton());
 
 		VRInputHandler::Register();
+		//InputBlocker::GetSingleton().Enable(true);
 		RE::DebugNotification("Live Placement Started");
 		logger::info("Live Placement Started for ref: {}", placedRef->GetFormID());
     }
@@ -131,6 +128,7 @@ namespace Placement
         if (ui)
             ui->RemoveEventSink<RE::MenuOpenCloseEvent>(PlacementUpdateHandler::GetSingleton());
 
+		//InputBlocker::GetSingleton().Enable(false);
 
 		logger::info("Placement Done");
     }

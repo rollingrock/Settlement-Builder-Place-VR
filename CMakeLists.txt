@@ -127,6 +127,7 @@ find_path(CLIB_UTIL_INCLUDE_DIRS "ClibUtil/detail/SimpleIni.h")
 # ---- Add source files ----
 
 set(SOURCES
+	src/InputBlocker.h
 	src/main.cpp
 	src/Papyrus.h
 	src/Papyrus.cpp
