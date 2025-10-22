@@ -1,73 +1,41 @@
 #pragma once
 #include "RE/Skyrim.h"
 
-class InputBlocker :
-	public RE::BSTEventSink<RE::InputEvent*>
+namespace InputBlocker
 {
-public:
-	static InputBlocker& GetSingleton()
+	struct ScopedActionBlock
 	{
-		static InputBlocker inst;
-		return inst;
-	}
+		bool applied = false;
 
-	void Enable(bool enable)
-	{
-		if (enable == enabled)
-			return;
-		enabled = enable;
+		void Apply(bool block)
+		{
+			auto* pc = RE::PlayerControls::GetSingleton();
+			if (!pc)
+				return;
 
-		auto* mgr = RE::BSInputDeviceManager::GetSingleton();
-		if (!mgr)
-			return;
+			for (auto& h : pc->handlers) {
+				if (!h)
+					continue;
 
-		if (enabled) {
-			mgr->AddEventSink(this);
-		} else {
-			mgr->RemoveEventSink(this);
-		}
-	}
-
-	bool IsEnabled() const { return enabled; }
-
-private:
-	InputBlocker() = default;
-
-	using EventResult = RE::BSEventNotifyControl;
-	EventResult ProcessEvent(RE::InputEvent* const* a_events,
-		RE::BSTEventSource<RE::InputEvent*>*) override
-	{
-		if (!enabled || !a_events) {
-			return EventResult::kContinue;
-		}
-
-		auto* user = RE::UserEvents::GetSingleton();
-		if (!user) {
-			return EventResult::kContinue;
-		}
-
-		// Compare against canonical user-event strings
-		const char* JUMP = user->jump.c_str();    // "Jump"
-		const char* SNEAK = user->sneak.c_str();  // "Sneak"
-
-		for (auto e = *a_events; e; e = e->next) {
-			if (const auto* be = e->AsButtonEvent()) {
-				// Only suppress actual presses/holds (let releases through, optional)
-				if (be->IsPressed() || be->IsHeld()) {
-					if (const char* ue = be->QUserEvent().c_str()) {
-						logger::info("InputBlocker: Detected user event: {}", ue);
-						if ((JUMP && std::strcmp(ue, JUMP) == 0) ||
-							(SNEAK && std::strcmp(ue, SNEAK) == 0)) {
-							// Swallow this control while edit mode is on
-							return EventResult::kStop;  // prevents further propagation
-						}
-					}
+				if (skyrim_cast<RE::JumpHandler*>(h) ||
+					skyrim_cast<RE::SneakHandler*>(h)) {
+					h->inputEventHandlingEnabled = !block;
+					applied = true;
 				}
 			}
 		}
+	};
 
-		return EventResult::kContinue;
+	static ScopedActionBlock g_block;
+
+	void EnterEditMode()
+	{
+		g_block.Apply(true);  // disable Jump/Sneak handlers
+							  // also add your input sink if you're not already
 	}
 
-	std::atomic_bool enabled{ false };
-};
+	void ExitEditMode()
+	{
+		g_block.Apply(false);  // re-enable Jump/Sneak
+	}
+}

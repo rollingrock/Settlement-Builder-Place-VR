@@ -3,6 +3,7 @@
 #include "SKSE/SKSE.h"
 #include "VRInputHandler.h"
 #include "InputBlocker.h"
+#include <cmath>
 
 namespace Placement
 {
@@ -22,6 +23,23 @@ namespace Placement
 		while (d >= 360.0f) d -= 360.0f;
 		while (d < 0.0f) d += 360.0f;
 		return (d * std::numbers::pi_v<float>) / 180.0f;
+	}
+
+	// simple linear interpolation
+	static RE::NiPoint3 Lerp(const RE::NiPoint3& a, const RE::NiPoint3& b, float t)
+	{
+		return RE::NiPoint3{ a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t };
+	}
+
+	// shortest angular difference in radians
+	static float ShortestAngleDiff(float from, float to)
+	{
+		float diff = fmodf(to - from, 2.0f * std::numbers::pi_v<float>);
+		if (diff < -std::numbers::pi_v<float>)
+			diff += 2.0f * std::numbers::pi_v<float>;
+		else if (diff > std::numbers::pi_v<float>)
+			diff -= 2.0f * std::numbers::pi_v<float>;
+		return diff;
 	}
 
     class PlacementUpdateHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -74,9 +92,11 @@ namespace Placement
             return RE::BSEventNotifyControl::kContinue;
         }
 
-		void LivePlace(RE::TESObjectREFR* a_refr, float yaw, float distance) {
+		void LivePlace(RE::TESObjectREFR* a_refr, float yawOffset, float distance)
+		{
 			auto player = RE::PlayerCharacter::GetSingleton();
-			if (!player || !player->RightWandNode) return;
+			if (!player || !player->RightWandNode)
+				return;
 
 			// Get the world transform of the right wand node
 			auto wandNode = player->RightWandNode.get();
@@ -91,9 +111,34 @@ namespace Placement
 
 			RE::NiPoint3 targetPos = wandPos + (worldForward * distance);
 
-			SKSE::GetTaskInterface()->AddTask([a_refr, targetPos, yaw] {
-				a_refr->SetPosition(targetPos);
-				a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, yaw });
+			// Compute yaw so object faces player: yaw = atan2(player.x - obj.x, player.y - obj.y)
+			const RE::NiPoint3 playerPos{ player->GetPosition().x, player->GetPosition().y, player->GetPosition().z };
+			float faceYaw = std::atan2(playerPos.x - targetPos.x, playerPos.y - targetPos.y);
+
+			// Apply manual yaw offset (from triggers) on top of facing yaw
+			float targetYaw = faceYaw + yawOffset;
+
+			// Initialize current preview position on first frame
+			if (g_state.currentPreviewPos.x == 0.0f && g_state.currentPreviewPos.y == 0.0f && g_state.currentPreviewPos.z == 0.0f) {
+				// set immediate (no smoothing) the very first frame to avoid large jump
+				g_state.currentPreviewPos = targetPos;
+				g_state.currentPreviewYaw = targetYaw;
+			}
+
+			// Apply smoothing (lerp) toward the instantaneous target
+			g_state.currentPreviewPos = Lerp(g_state.currentPreviewPos, targetPos, g_state.positionSmoothAlpha);
+
+			// Smooth yaw using shortest-angle interpolation
+			float angleDiff = ShortestAngleDiff(g_state.currentPreviewYaw, targetYaw);
+			g_state.currentPreviewYaw += angleDiff * g_state.rotationSmoothAlpha;
+
+			// Schedule a main-thread task to set the smoothed transform
+			RE::NiPoint3 appliedPos = g_state.currentPreviewPos;
+			float appliedYaw = g_state.currentPreviewYaw;
+
+			SKSE::GetTaskInterface()->AddTask([a_refr, appliedPos, appliedYaw] {
+				a_refr->SetPosition(appliedPos);
+				a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, appliedYaw });
 				a_refr->Update3DPosition(true);
 			});
 		}
@@ -107,6 +152,13 @@ namespace Placement
         g_state.placedRef = placedRef;
         g_state.active = true;
         g_state.previewYaw = 0.0f; 
+        g_state.previewDistance = 220.0f;
+		
+        // Reset smoothing state so preview starts from current ref transform
+		// initialize currentPreviewPos to the object's current world position if possible
+		RE::NiPoint3 curPos = placedRef->GetPosition();
+		g_state.currentPreviewPos = curPos;
+		g_state.currentPreviewYaw = placedRef->GetAngleZ();
 
         // Register for per-frame updates (using MenuOpenCloseEvent as a simple per-frame hook)
         auto ui = RE::UI::GetSingleton();
@@ -114,7 +166,7 @@ namespace Placement
             ui->AddEventSink<RE::MenuOpenCloseEvent>(PlacementUpdateHandler::GetSingleton());
 
 		VRInputHandler::Register();
-		//InputBlocker::GetSingleton().Enable(true);
+		InputBlocker::EnterEditMode();
 		RE::DebugNotification("Live Placement Started");
 		logger::info("Live Placement Started for ref: {}", placedRef->GetFormID());
     }
@@ -128,7 +180,7 @@ namespace Placement
         if (ui)
             ui->RemoveEventSink<RE::MenuOpenCloseEvent>(PlacementUpdateHandler::GetSingleton());
 
-		//InputBlocker::GetSingleton().Enable(false);
+		InputBlocker::ExitEditMode();
 
 		logger::info("Placement Done");
     }
