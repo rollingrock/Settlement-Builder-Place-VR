@@ -3,6 +3,7 @@
 #include "SKSE/SKSE.h"
 #include "VRInputHandler.h"
 #include "InputBlocker.h"
+#include "BoundsUtil.h"
 #include <cmath>
 
 namespace Placement
@@ -72,7 +73,7 @@ namespace Placement
             float joyY = input->GetRightJoystickY();
             if (std::abs(joyY) > 0.1f) { // Deadzone
                 g_state.previewDistance += joyY * DISTANCE_STEP;
-                g_state.previewDistance = std::clamp(g_state.previewDistance, 50.0f, 1000.0f); // Clamp to reasonable range
+                g_state.previewDistance = std::clamp(g_state.previewDistance, 50.0f, 3000.0f); // Clamp to reasonable range
             }
 
             // Update preview position and rotation
@@ -118,13 +119,6 @@ namespace Placement
 			// Apply manual yaw offset (from triggers) on top of facing yaw
 			float targetYaw = faceYaw + yawOffset;
 
-			// Initialize current preview position on first frame
-			if (g_state.currentPreviewPos.x == 0.0f && g_state.currentPreviewPos.y == 0.0f && g_state.currentPreviewPos.z == 0.0f) {
-				// set immediate (no smoothing) the very first frame to avoid large jump
-				g_state.currentPreviewPos = targetPos;
-				g_state.currentPreviewYaw = targetYaw;
-			}
-
 			// Apply smoothing (lerp) toward the instantaneous target
 			g_state.currentPreviewPos = Lerp(g_state.currentPreviewPos, targetPos, g_state.positionSmoothAlpha);
 
@@ -144,21 +138,29 @@ namespace Placement
 		}
     };
 
-    void StartLivePlace(RE::TESObjectREFR* placedRef)
+    void StartLivePlace(RE::TESObjectREFR* placedRef, float faceRotation, float yMult, float zOffset, float xOffset)
     {
         if (!placedRef)
             return;
 
+		placedRef->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, false);
+
         g_state.placedRef = placedRef;
         g_state.active = true;
         g_state.previewYaw = 0.0f; 
-        g_state.previewDistance = 220.0f;
 		
         // Reset smoothing state so preview starts from current ref transform
 		// initialize currentPreviewPos to the object's current world position if possible
-		RE::NiPoint3 curPos = placedRef->GetPosition();
+		auto info = BoundsUtil::GetApproxBounds(placedRef);
+		RE::NiPoint3 curPos = BoundsUtil::SafeSpawnInFrontOfPlayer(info.radius);
+		curPos.z += zOffset;
+		curPos.x += xOffset;
 		g_state.currentPreviewPos = curPos;
 		g_state.currentPreviewYaw = placedRef->GetAngleZ();
+
+		auto distance = curPos.GetDistance(RE::PlayerCharacter::GetSingleton()->GetPosition());
+		g_state.previewDistance = yMult > 0.0 ? distance * yMult : distance;
+
 
         // Register for per-frame updates (using MenuOpenCloseEvent as a simple per-frame hook)
         auto ui = RE::UI::GetSingleton();
@@ -168,7 +170,7 @@ namespace Placement
 		VRInputHandler::Register();
 		InputBlocker::EnterEditMode();
 		RE::DebugNotification("Live Placement Started");
-		logger::info("Live Placement Started for ref: {}", placedRef->GetFormID());
+		logger::info("Live Placement Started for ref: {} {}", placedRef->GetFormID(), distance);
     }
 
     void OnPlacementConfirmed()

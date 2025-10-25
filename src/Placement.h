@@ -27,6 +27,6 @@ namespace Placement
         float rotationSmoothAlpha{ 0.25f };
     };
 
-    void StartLivePlace(RE::TESObjectREFR* placedRef);
+    void StartLivePlace(RE::TESObjectREFR* placedRef, float faceRotation, float yMult, float zOffset, float xOffset);
     void OnPlacementConfirmed();
 }

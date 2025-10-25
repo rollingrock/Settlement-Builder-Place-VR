@@ -4,14 +4,14 @@
 
 namespace Papyrus
 {
-	void LivePlace(RE::StaticFunctionTag*, RE::TESObjectREFR* a_refr)
+	void LivePlace(RE::StaticFunctionTag*, RE::TESObjectREFR* a_refr, float faceRotation, float yMult, float zOffset, float xOffset)
 	{
 		if (!a_refr) {
 			// Handle null reference
 			return;
 		}
 
-		Placement::StartLivePlace(a_refr);
+		Placement::StartLivePlace(a_refr, faceRotation, yMult, zOffset, xOffset);
 		return;
 	}
 
