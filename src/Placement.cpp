@@ -83,9 +83,9 @@ namespace Placement
             if (input->IsAButtonPressed()) {
                 g_state.placedRef->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true);
                 RE::DebugNotification("Item Placed");
+                OnPlacementConfirmed(g_state.placedRef);
                 g_state.active = false;
                 g_state.placedRef = nullptr;
-                OnPlacementConfirmed();
             }
 
 			input->Reset();
@@ -111,6 +111,9 @@ namespace Placement
 			RE::NiPoint3 worldForward = wandTransform.rotate * localForward;
 
 			RE::NiPoint3 targetPos = wandPos + (worldForward * distance);
+
+			targetPos.x += g_state.previewXoffset;
+			targetPos.z += g_state.previewZoffset;
 
 			// Compute yaw so object faces player: yaw = atan2(player.x - obj.x, player.y - obj.y)
 			const RE::NiPoint3 playerPos{ player->GetPosition().x, player->GetPosition().y, player->GetPosition().z };
@@ -143,23 +146,24 @@ namespace Placement
         if (!placedRef)
             return;
 
+		// Set the placedRef to kKeyframed so physics doesn't interfere during placement)
 		placedRef->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, false);
 
         g_state.placedRef = placedRef;
         g_state.active = true;
-        g_state.previewYaw = 0.0f; 
+        g_state.previewYaw = faceRotation; 
 		
         // Reset smoothing state so preview starts from current ref transform
 		// initialize currentPreviewPos to the object's current world position if possible
 		auto info = BoundsUtil::GetApproxBounds(placedRef);
 		RE::NiPoint3 curPos = BoundsUtil::SafeSpawnInFrontOfPlayer(info.radius);
-		curPos.z += zOffset;
-		curPos.x += xOffset;
+		g_state.previewXoffset = xOffset;
+		g_state.previewZoffset = zOffset + 150.0f;
 		g_state.currentPreviewPos = curPos;
-		g_state.currentPreviewYaw = placedRef->GetAngleZ();
+		g_state.currentPreviewYaw = faceRotation;
 
 		auto distance = curPos.GetDistance(RE::PlayerCharacter::GetSingleton()->GetPosition());
-		g_state.previewDistance = yMult > 0.0 ? distance * yMult : distance;
+		g_state.previewDistance = yMult > 0.0 ? yMult : distance;
 
 
         // Register for per-frame updates (using MenuOpenCloseEvent as a simple per-frame hook)
@@ -173,9 +177,9 @@ namespace Placement
 		logger::info("Live Placement Started for ref: {} {}", placedRef->GetFormID(), distance);
     }
 
-    void OnPlacementConfirmed()
+    void OnPlacementConfirmed(RE::TESObjectREFR* a_refr)
     {
-		SKSE::GetTaskInterface()->AddTask([] { SendModEvent("SBOnPlacementConfirmed", "Done", 0.0f, nullptr); });
+		SKSE::GetTaskInterface()->AddTask([a_refr] { SendModEvent("SBOnPlacementConfirmed", "Done", 0.0f, a_refr); });
 
 		VRInputHandler::UnRegister();
         auto ui = RE::UI::GetSingleton();

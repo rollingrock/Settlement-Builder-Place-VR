@@ -13,6 +13,9 @@ namespace Placement
         float previewYaw{ 0.0f };        // desired yaw from input
         float previewDistance{ 220.0f }; // desired distance from wand
 
+		float previewXoffset{ 0.0f };  // desired X offset from wand
+		float previewZoffset{ 0.0f };  // desired X offset from wand
+
         // baseline and state
         bool hasBaseline{ false };
         RE::NiPoint3 baselineLocal{}; 
@@ -28,5 +31,5 @@ namespace Placement
     };
 
     void StartLivePlace(RE::TESObjectREFR* placedRef, float faceRotation, float yMult, float zOffset, float xOffset);
-    void OnPlacementConfirmed();
+    void OnPlacementConfirmed(RE::TESObjectREFR* a_refr);
 }
