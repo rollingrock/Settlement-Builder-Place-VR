@@ -28,6 +28,10 @@ namespace Placement
 		float currentPreviewPitch{ 0.0f };  // pitch (radians) currently being applied
 		float currentPreviewRoll{ 0.0f };
 
+		// New: where is the mesh center relative to the ref origin in local coords
+		RE::NiPoint3 localCenterOffset{};
+		bool hasLocalCenterOffset{ false };
+
         // smoothing factors (0..1). alpha per-frame lerp factor.
         // Recommended starting values: position 0.18, rotation 0.25 — tune as needed.
         float positionSmoothAlpha{ 0.18f };

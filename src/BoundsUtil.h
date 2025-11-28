@@ -10,6 +10,7 @@ namespace BoundsUtil
 		float radius = 0.0f;         // conservative bound sphere radius in world units
 		RE::NiPoint3 halfExtents{};  // world-space AABB half-extents
 		bool from3D = false;         // true if derived from loaded 3D
+		RE::NiPoint3 center{};
 	};
 
 	inline BoundsInfo GetApproxBounds(RE::TESObjectREFR* ref)

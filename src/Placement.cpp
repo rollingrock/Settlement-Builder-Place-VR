@@ -297,6 +297,10 @@ namespace Placement
 			RE::NiPoint3 forwardTilted = Normalize(Rotate(qOrient, forwardHoriz));
 			RE::NiPoint3 upTilted = Normalize(Rotate(qOrient, worldUp));
 
+			RE::NiPoint3 rightTilted = Cross(forwardTilted, upTilted);
+			// normalize just in case numeric crap happens
+			rightTilted = Normalize(rightTilted);
+
 			// --- Convert orientation to Skyrim-style Euler (pitch, roll, yaw) ---
 
 			// yaw from forward (same convention we used for baseYaw)
@@ -339,18 +343,37 @@ namespace Placement
 			float appliedYaw = g_state.currentPreviewYaw;
 			float appliedPitch = g_state.currentPreviewPitch;
 			float appliedRoll = g_state.currentPreviewRoll;
+			RE::NiPoint3 appliedCenter = g_state.currentPreviewPos;
+
+			// Default: if we don't know a local center offset, treat origin == center
+			RE::NiPoint3 originPos = appliedCenter;
+
+			if (g_state.hasLocalCenterOffset) {
+				const RE::NiPoint3 local = g_state.localCenterOffset;
+
+				// Convert local offset back to world using current basis
+				RE::NiPoint3 offsetWorld{
+					rightTilted.x * local.x + upTilted.x * local.y + forwardTilted.x * local.z,
+					rightTilted.y * local.x + upTilted.y * local.y + forwardTilted.y * local.z,
+					rightTilted.z * local.x + upTilted.z * local.y + forwardTilted.z * local.z
+				};
+
+				originPos.x = appliedCenter.x - offsetWorld.x;
+				originPos.y = appliedCenter.y - offsetWorld.y;
+				originPos.z = appliedCenter.z - offsetWorld.z;
+			}
 
 			// --- Apply on main thread ---
 
 			SKSE::GetTaskInterface()->AddTask([a_refr,
-												  appliedPos,
+												  originPos,
 												  appliedYaw,
 												  appliedPitch,
 												  appliedRoll] {
 				if (!a_refr)
 					return;
 
-				a_refr->SetPosition(appliedPos);
+				a_refr->SetPosition(originPos);
 				// Skyrim: x = pitch, y = roll, z = yaw
 				a_refr->SetAngle(RE::NiPoint3{ appliedPitch, appliedRoll, appliedYaw });
 				a_refr->Update3DPosition(true);
@@ -363,6 +386,59 @@ namespace Placement
         if (!placedRef)
             return;
 
+		auto bounds = BoundsUtil::GetApproxBounds(placedRef);  // your existing helper
+		RE::NiPoint3 centerWorld = bounds.center;              // adjust if your struct differs
+
+		RE::NiPoint3 originWorld = placedRef->GetPosition();
+		RE::NiPoint3 offsetWorld{
+			centerWorld.x - originWorld.x,
+			centerWorld.y - originWorld.y,
+			centerWorld.z - originWorld.z
+		};
+
+		// Build local basis from the ref's current angles
+		RE::NiPoint3 ang = placedRef->GetAngle();  // x=pitch, y=roll, z=yaw
+		float pitch = ang.x;
+		float roll = ang.y;
+		float yaw = ang.z;
+
+		float cp = std::cos(pitch), sp = std::sin(pitch);
+		float cr = std::cos(roll), sr = std::sin(roll);
+		float cy = std::cos(yaw), sy = std::sin(yaw);
+
+		// One conventional Skyrim basis (match your LivePlace convention!)
+		RE::NiPoint3 forward{
+			sy * cp,
+			cy * cp,
+			sp
+		};
+
+		RE::NiPoint3 right{
+			cy * cr + sy * sp * sr,
+			-sy * cr + cy * sp * sr,
+			-cp * sr
+		};
+
+		RE::NiPoint3 up{
+			cy * sr - sy * sp * cr,
+			sy * sr + cy * sp * cr,
+			cp * cr
+		};
+
+		auto dot = [](const RE::NiPoint3& a, const RE::NiPoint3& b) {
+			return a.x * b.x + a.y * b.y + a.z * b.z;
+		};
+
+		// Inverse of an orthonormal basis is just the transpose:
+		RE::NiPoint3 localOffset{
+			dot(offsetWorld, right),
+			dot(offsetWorld, up),
+			dot(offsetWorld, forward)
+		};
+
+		g_state.localCenterOffset = localOffset;
+		g_state.hasLocalCenterOffset = true;
+
 		// Set the placedRef to kKeyframed so physics doesn't interfere during placement)
 		placedRef->SetMotionType(RE::hkpMotion::MotionType::kKeyframed, false);
 
@@ -373,17 +449,14 @@ namespace Placement
 		g_state.previewRoll = 0.0f;
 		
         // Reset smoothing state so preview starts from current ref transform
-		// initialize currentPreviewPos to the object's current world position if possible
-		auto info = BoundsUtil::GetApproxBounds(placedRef);
-		RE::NiPoint3 curPos = BoundsUtil::SafeSpawnInFrontOfPlayer(info.radius);
 		g_state.previewXoffset = xOffset;
 		g_state.previewZoffset = zOffset + 150.0f;
-		g_state.currentPreviewPos = curPos;
+		g_state.currentPreviewPos = centerWorld;
 		g_state.currentPreviewYaw = g_state.previewYaw;
 		g_state.currentPreviewPitch = g_state.previewPitch;
 		g_state.currentPreviewRoll = g_state.previewRoll;
 
-		auto distance = curPos.GetDistance(RE::PlayerCharacter::GetSingleton()->GetPosition());
+		auto distance = centerWorld.GetDistance(RE::PlayerCharacter::GetSingleton()->GetPosition());
 		g_state.previewDistance = yMult > 0.0 ? yMult : distance;
 
 

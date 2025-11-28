@@ -1,5 +1,4 @@
 #include "Papyrus.h"
-#include "VRInputHandler.h"
 
 //void MessageHandler(SKSE::MessagingInterface::Message* a_msg)
 //{
