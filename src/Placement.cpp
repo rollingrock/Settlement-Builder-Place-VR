@@ -6,6 +6,112 @@
 #include "BoundsUtil.h"
 #include <cmath>
 
+
+namespace
+{
+	struct Quaternion
+	{
+		float w, x, y, z;
+	};
+
+	Quaternion MakeAxisAngle(const RE::NiPoint3& axisIn, float angle)
+	{
+		RE::NiPoint3 axis = axisIn;
+		float len2 = axis.x * axis.x + axis.y * axis.y + axis.z * axis.z;
+		if (len2 < 1e-8f) {
+			return { 1.0f, 0.0f, 0.0f, 0.0f };
+		}
+		float invLen = 1.0f / std::sqrt(len2);
+		axis.x *= invLen;
+		axis.y *= invLen;
+		axis.z *= invLen;
+
+		float half = angle * 0.5f;
+		float s = std::sin(half);
+		float c = std::cos(half);
+
+		return { c, axis.x * s, axis.y * s, axis.z * s };
+	}
+
+	Quaternion Mul(const Quaternion& a, const Quaternion& b)
+	{
+		return {
+			a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+			a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+			a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+			a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w
+		};
+	}
+
+	RE::NiPoint3 Rotate(const Quaternion& q, const RE::NiPoint3& v)
+	{
+		// q * v * q^{-1} optimized
+		RE::NiPoint3 qv{ q.x, q.y, q.z };
+
+		// t = 2 * cross(qv, v)
+		RE::NiPoint3 t{
+			2.0f * (qv.y * v.z - qv.z * v.y),
+			2.0f * (qv.z * v.x - qv.x * v.z),
+			2.0f * (qv.x * v.y - qv.y * v.x)
+		};
+
+		// v' = v + q.w * t + cross(qv, t)
+		RE::NiPoint3 crossQT{
+			qv.y * t.z - qv.z * t.y,
+			qv.z * t.x - qv.x * t.z,
+			qv.x * t.y - qv.y * t.x
+		};
+
+		return RE::NiPoint3{
+			v.x + q.w * t.x + crossQT.x,
+			v.y + q.w * t.y + crossQT.y,
+			v.z + q.w * t.z + crossQT.z
+		};
+	}
+
+	float Dot(const RE::NiPoint3& a, const RE::NiPoint3& b)
+	{
+		return a.x * b.x + a.y * b.y + a.z * b.z;
+	}
+
+	RE::NiPoint3 Normalize(const RE::NiPoint3& v)
+	{
+		float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
+		if (len2 < 1e-8f)
+			return RE::NiPoint3{};
+		float invLen = 1.0f / std::sqrt(len2);
+		return RE::NiPoint3{ v.x * invLen, v.y * invLen, v.z * invLen };
+	}
+
+	RE::NiPoint3 Cross(const RE::NiPoint3& a, const RE::NiPoint3& b)
+	{
+		return RE::NiPoint3{
+			a.y * b.z - a.z * b.y,
+			a.z * b.x - a.x * b.z,
+			a.x * b.y - a.y * b.x
+		};
+	}
+
+	// shortest signed angle between a and b around axis n
+	float SignedAngleAroundAxis(const RE::NiPoint3& aIn,
+		const RE::NiPoint3& bIn,
+		const RE::NiPoint3& axisIn)
+	{
+		RE::NiPoint3 axis = Normalize(axisIn);
+		RE::NiPoint3 a = aIn - axis * Dot(axis, aIn);
+		RE::NiPoint3 b = bIn - axis * Dot(axis, bIn);
+		a = Normalize(a);
+		b = Normalize(b);
+
+		float dot = std::clamp(Dot(a, b), -1.0f, 1.0f);
+		float angle = std::acos(dot);
+		RE::NiPoint3 cross = Cross(a, b);
+		float sign = (Dot(cross, axis) >= 0.0f) ? 1.0f : -1.0f;
+		return angle * sign;
+	}
+}
+
+
 namespace Placement
 {
     static PlacementState g_state;
@@ -44,69 +150,91 @@ namespace Placement
 	}
 
     class PlacementUpdateHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
-    {
-    public:
-        static PlacementUpdateHandler* GetSingleton()
-        {
-            static PlacementUpdateHandler instance;
-            return &instance;
-        }
+	{
+	public:
+		static PlacementUpdateHandler* GetSingleton()
+		{
+			static PlacementUpdateHandler instance;
+			return &instance;
+		}
 
-        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent*,
-                                              RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
-        {
-            if (!g_state.active || !g_state.placedRef)
-                return RE::BSEventNotifyControl::kContinue;
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent*,
+			RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
+		{
+			if (!g_state.active || !g_state.placedRef)
+				return RE::BSEventNotifyControl::kContinue;
 
-            auto input = VRInputHandler::GetSingleton();
+			auto input = VRInputHandler::GetSingleton();
 
-            // Adjust yaw with triggers
-            constexpr float yawStep = 2.5f * std::numbers::pi_v<float> / 180.0f; // 2.5 degrees in radians
-            if (input->IsLeftTriggerPressed()) {
-                g_state.previewYaw -= yawStep;
-            }
-            if (input->IsRightTriggerPressed()) {
-                g_state.previewYaw += yawStep;
-            }
+			// Angle step for both yaw and pitch
+			constexpr float angleStep = 2.5f * std::numbers::pi_v<float> / 180.0f;  // 2.5 degrees in radians
 
-            // Adjust distance with right joystick Y
-            float joyY = input->GetRightJoystickY();
-            if (std::abs(joyY) > 0.1f) { // Deadzone
-                g_state.previewDistance += joyY * DISTANCE_STEP;
-                g_state.previewDistance = std::clamp(g_state.previewDistance, 50.0f, 3000.0f); // Clamp to reasonable range
-            }
+			bool rightGrip = input->IsRightGripPressed();
+			bool leftGrip = input->IsLeftGripPressed();
 
-            // Update preview position and rotation
-            LivePlace(g_state.placedRef, g_state.previewYaw, g_state.previewDistance);
+			if (rightGrip) {
+				// While right grip is held, triggers adjust pitch instead of yaw
+				if (input->IsLeftTriggerPressed()) {
+					g_state.previewPitch -= angleStep;  // left trigger = pitch down (or invert if you prefer)
+				}
+				if (input->IsRightTriggerPressed()) {
+					g_state.previewPitch += angleStep;  // right trigger = pitch up
+				}
+			} else if (leftGrip) {
+				// Roll mode
+				if (input->IsLeftTriggerPressed()) {
+					g_state.previewRoll -= angleStep;  // roll left
+				}
+				if (input->IsRightTriggerPressed()) {
+					g_state.previewRoll += angleStep;  // roll right
+				}
+			} else {
+				// Normal mode: triggers adjust yaw
+				if (input->IsLeftTriggerPressed()) {
+					g_state.previewYaw -= angleStep;
+				}
+				if (input->IsRightTriggerPressed()) {
+					g_state.previewYaw += angleStep;
+				}
+			}
 
-            // Confirm placement with "A" button
-            if (input->IsAButtonPressed()) {
-                g_state.placedRef->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true);
-                RE::DebugNotification("Item Placed");
-                OnPlacementConfirmed(g_state.placedRef);
-                g_state.active = false;
-                g_state.placedRef = nullptr;
-            }
+			// Adjust distance with right joystick Y
+			float joyY = input->GetRightJoystickY();
+			if (std::abs(joyY) > 0.1f) {  // Deadzone
+				g_state.previewDistance += joyY * DISTANCE_STEP;
+				g_state.previewDistance = std::clamp(g_state.previewDistance, 50.0f, 3000.0f);  // Clamp to reasonable range
+			}
+
+			// Update preview position and rotation
+			LivePlace(g_state.placedRef, g_state.previewYaw, g_state.previewPitch, g_state.previewRoll, g_state.previewDistance);
+
+			// Confirm placement with "A" button
+			if (input->IsAButtonPressed()) {
+				g_state.placedRef->SetMotionType(RE::hkpMotion::MotionType::kDynamic, true);
+				RE::DebugNotification("Item Placed");
+				OnPlacementConfirmed(g_state.placedRef);
+				g_state.active = false;
+				g_state.placedRef = nullptr;
+			}
 
 			input->Reset();
 
-            return RE::BSEventNotifyControl::kContinue;
-        }
+			return RE::BSEventNotifyControl::kContinue;
+		}
 
-		void LivePlace(RE::TESObjectREFR* a_refr, float yawOffset, float distance)
+		void LivePlace(RE::TESObjectREFR* a_refr, float yawOffset, float pitchOffset, float rollOffset, float distance)
 		{
 			auto player = RE::PlayerCharacter::GetSingleton();
 			if (!player || !player->RightWandNode)
 				return;
 
-			// Get the world transform of the right wand node
+			// --- Position (same as before, use wand + distance) ---
+
 			auto wandNode = player->RightWandNode.get();
 			const auto& wandTransform = wandNode->world;
 
-			// The position of the wand in world space
 			const auto& wandPos = wandTransform.translate;
 
-			// The forward direction of the wand in world space
 			RE::NiPoint3 localForward{ 0.0f, 0.0f, -1.0f };
 			RE::NiPoint3 worldForward = wandTransform.rotate * localForward;
 
@@ -115,31 +243,120 @@ namespace Placement
 			targetPos.x += g_state.previewXoffset;
 			targetPos.z += g_state.previewZoffset;
 
-			// Compute yaw so object faces player: yaw = atan2(player.x - obj.x, player.y - obj.y)
-			const RE::NiPoint3 playerPos{ player->GetPosition().x, player->GetPosition().y, player->GetPosition().z };
-			float faceYaw = std::atan2(playerPos.x - targetPos.x, playerPos.y - targetPos.y);
+			// --- Base yaw: face the player horizontally ---
 
-			// Apply manual yaw offset (from triggers) on top of facing yaw
-			float targetYaw = faceYaw + yawOffset;
+			const RE::NiPoint3 playerPos = player->GetPosition();
 
-			// Apply smoothing (lerp) toward the instantaneous target
-			g_state.currentPreviewPos = Lerp(g_state.currentPreviewPos, targetPos, g_state.positionSmoothAlpha);
+			RE::NiPoint3 toPlayer{
+				playerPos.x - targetPos.x,
+				playerPos.y - targetPos.y,
+				0.0f
+			};
 
-			// Smooth yaw using shortest-angle interpolation
-			float angleDiff = ShortestAngleDiff(g_state.currentPreviewYaw, targetYaw);
-			g_state.currentPreviewYaw += angleDiff * g_state.rotationSmoothAlpha;
+			float len2 = toPlayer.x * toPlayer.x + toPlayer.y * toPlayer.y;
+			if (len2 < 1e-8f) {
+				return;
+			}
+			float invLen = 1.0f / std::sqrt(len2);
+			toPlayer.x *= invLen;
+			toPlayer.y *= invLen;
+			toPlayer.z = 0.0f;
 
-			// Schedule a main-thread task to set the smoothed transform
+			float baseYaw = std::atan2(toPlayer.x, toPlayer.y);
+
+			// Combine base yaw with user yaw offset
+			float targetYaw = baseYaw + yawOffset;
+
+			// Horizontal forward vector from final yaw (no pitch yet)
+			RE::NiPoint3 forwardHoriz{
+				std::sin(targetYaw),
+				std::cos(targetYaw),
+				0.0f
+			};
+			forwardHoriz = Normalize(forwardHoriz);
+
+			RE::NiPoint3 worldUp{ 0.0f, 0.0f, 1.0f };
+
+			// Right axis for pitch is worldUp x forwardHoriz
+			RE::NiPoint3 right = Cross(worldUp, forwardHoriz);
+			if (right.x * right.x + right.y * right.y + right.z * right.z < 1e-8f) {
+				right = RE::NiPoint3{ 1.0f, 0.0f, 0.0f };
+			} else {
+				right = Normalize(right);
+			}
+
+			// --- Quaternion: pitch then roll ---
+
+			Quaternion qPitch = MakeAxisAngle(right, pitchOffset);
+			Quaternion qRoll = MakeAxisAngle(forwardHoriz, rollOffset);
+
+			// Order: first pitch, then roll around the new forward
+			Quaternion qOrient = Mul(qRoll, qPitch);
+
+			// Rotate forward & up to get the tilted basis
+			RE::NiPoint3 forwardTilted = Normalize(Rotate(qOrient, forwardHoriz));
+			RE::NiPoint3 upTilted = Normalize(Rotate(qOrient, worldUp));
+
+			// --- Convert orientation to Skyrim-style Euler (pitch, roll, yaw) ---
+
+			// yaw from forward (same convention we used for baseYaw)
+			float finalYaw = std::atan2(forwardTilted.x,
+				forwardTilted.y);
+
+			// pitch from forward's vertical vs horizontal length
+			float horizLen = std::sqrt(forwardTilted.x * forwardTilted.x +
+									   forwardTilted.y * forwardTilted.y);
+			float finalPitch = std::atan2(forwardTilted.z, horizLen);
+
+			// Build a "no-roll" up vector from yaw + pitch so that we can
+			// measure how much upTilted is twisted (roll) around forward.
+			RE::NiPoint3 xAxis{ 1.0f, 0.0f, 0.0f };
+			RE::NiPoint3 zAxis{ 0.0f, 0.0f, 1.0f };
+
+			Quaternion qYaw = MakeAxisAngle(zAxis, finalYaw);
+			Quaternion qPitchNoRoll = MakeAxisAngle(xAxis, finalPitch);
+			Quaternion qNoRoll = Mul(qPitchNoRoll, qYaw);
+
+			RE::NiPoint3 upNoRoll = Normalize(Rotate(qNoRoll, worldUp));
+
+			// Roll is the signed angle between upNoRoll and upTilted around forwardTilted
+			float finalRoll = SignedAngleAroundAxis(upNoRoll, upTilted, forwardTilted);
+
+			// --- Smooth position and Euler angles ---
+
+			g_state.currentPreviewPos =
+				Lerp(g_state.currentPreviewPos, targetPos, g_state.positionSmoothAlpha);
+
+			float yawDiff = ShortestAngleDiff(g_state.currentPreviewYaw, finalYaw);
+			float pitchDiff = ShortestAngleDiff(g_state.currentPreviewPitch, finalPitch);
+			float rollDiff = ShortestAngleDiff(g_state.currentPreviewRoll, finalRoll);
+
+			g_state.currentPreviewYaw += yawDiff * g_state.rotationSmoothAlpha;
+			g_state.currentPreviewPitch += pitchDiff * g_state.rotationSmoothAlpha;
+			g_state.currentPreviewRoll += rollDiff * g_state.rotationSmoothAlpha;
+
 			RE::NiPoint3 appliedPos = g_state.currentPreviewPos;
 			float appliedYaw = g_state.currentPreviewYaw;
+			float appliedPitch = g_state.currentPreviewPitch;
+			float appliedRoll = g_state.currentPreviewRoll;
 
-			SKSE::GetTaskInterface()->AddTask([a_refr, appliedPos, appliedYaw] {
+			// --- Apply on main thread ---
+
+			SKSE::GetTaskInterface()->AddTask([a_refr,
+												  appliedPos,
+												  appliedYaw,
+												  appliedPitch,
+												  appliedRoll] {
+				if (!a_refr)
+					return;
+
 				a_refr->SetPosition(appliedPos);
-				a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, appliedYaw });
+				// Skyrim: x = pitch, y = roll, z = yaw
+				a_refr->SetAngle(RE::NiPoint3{ appliedPitch, appliedRoll, appliedYaw });
 				a_refr->Update3DPosition(true);
 			});
 		}
-    };
+	};
 
     void StartLivePlace(RE::TESObjectREFR* placedRef, float faceRotation, float yMult, float zOffset, float xOffset)
     {
@@ -151,7 +368,9 @@ namespace Placement
 
         g_state.placedRef = placedRef;
         g_state.active = true;
-        g_state.previewYaw = faceRotation; 
+        g_state.previewYaw = faceRotation * std::numbers::pi_v<float> / 180.0f; 
+		g_state.previewPitch = 0.0f;  // start level
+		g_state.previewRoll = 0.0f;
 		
         // Reset smoothing state so preview starts from current ref transform
 		// initialize currentPreviewPos to the object's current world position if possible
@@ -160,7 +379,9 @@ namespace Placement
 		g_state.previewXoffset = xOffset;
 		g_state.previewZoffset = zOffset + 150.0f;
 		g_state.currentPreviewPos = curPos;
-		g_state.currentPreviewYaw = faceRotation;
+		g_state.currentPreviewYaw = g_state.previewYaw;
+		g_state.currentPreviewPitch = g_state.previewPitch;
+		g_state.currentPreviewRoll = g_state.previewRoll;
 
 		auto distance = curPos.GetDistance(RE::PlayerCharacter::GetSingleton()->GetPosition());
 		g_state.previewDistance = yMult > 0.0 ? yMult : distance;

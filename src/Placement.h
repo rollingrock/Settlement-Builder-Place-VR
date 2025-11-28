@@ -11,6 +11,8 @@ namespace Placement
 
         // preview control
         float previewYaw{ 0.0f };        // desired yaw from input
+		float previewPitch{ 0.0f };       // desired pitch from input
+		float previewRoll{ 0.0f };
         float previewDistance{ 220.0f }; // desired distance from wand
 
 		float previewXoffset{ 0.0f };  // desired X offset from wand
@@ -23,6 +25,8 @@ namespace Placement
         // current (smoothed) preview transform applied to the object
         RE::NiPoint3 currentPreviewPos{};    // world position currently being applied
         float currentPreviewYaw{ 0.0f };     // yaw (radians) currently being applied
+		float currentPreviewPitch{ 0.0f };  // pitch (radians) currently being applied
+		float currentPreviewRoll{ 0.0f };
 
         // smoothing factors (0..1). alpha per-frame lerp factor.
         // Recommended starting values: position 0.18, rotation 0.25 — tune as needed.

@@ -6,7 +6,8 @@ constexpr int DEVICE_VR_LEFT = 6;
 constexpr int BUTTON_LEFT_TRIGGER = 33;   
 constexpr int BUTTON_RIGHT_TRIGGER = 33;  
 constexpr int BUTTON_A = 7;              
-
+constexpr int BUTTON_RIGHT_GRIP = 2;
+constexpr int BUTTON_LEFT_GRIP = 2;
 
 VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*)
 {
@@ -23,14 +24,38 @@ VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* 
             //    button->IsHeld()
             //);
 
-			if (button->device.underlying() == DEVICE_VR_LEFT && button->GetIDCode() == BUTTON_LEFT_TRIGGER && button->IsHeld()) {
+			// Left trigger
+			if (button->device.underlying() == DEVICE_VR_LEFT &&
+				button->GetIDCode() == BUTTON_LEFT_TRIGGER &&
+				button->IsHeld()) {
 				leftTriggerPressed = true;
 			}
-			if (button->device.underlying() == DEVICE_VR_RIGHT && button->GetIDCode() == BUTTON_RIGHT_TRIGGER && button->IsHeld()) {
+
+			// Right trigger
+			if (button->device.underlying() == DEVICE_VR_RIGHT &&
+				button->GetIDCode() == BUTTON_RIGHT_TRIGGER &&
+				button->IsHeld()) {
 				rightTriggerPressed = true;
 			}
-			if (button->device.underlying() == DEVICE_VR_RIGHT && button->GetIDCode() == BUTTON_A && button->IsHeld()) {
+
+			// A button
+			if (button->device.underlying() == DEVICE_VR_RIGHT &&
+				button->GetIDCode() == BUTTON_A &&
+				button->IsHeld()) {
 				aButtonPressed = true;
+			}
+
+			// Right grip (held)
+			if (button->device.underlying() == DEVICE_VR_RIGHT &&
+				button->GetIDCode() == BUTTON_RIGHT_GRIP &&
+				button->IsHeld()) {
+				rightGripPressed = true;
+			}
+			// Left grip (held)
+			if (button->device.underlying() == DEVICE_VR_LEFT &&
+				button->GetIDCode() == BUTTON_LEFT_GRIP &&
+				button->IsHeld()) {
+				leftGripPressed = true;
 			}
         }
 		// Detect thumbstick event for right wand
@@ -45,10 +70,6 @@ VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* 
     return RE::BSEventNotifyControl::kContinue;
 }
 
-float VRInputHandler::GetRightJoystickY() const
-{
-	return rightJoystickY;
-}
 
 void VRInputHandler::Register()
 {
@@ -79,20 +100,8 @@ void VRInputHandler::Reset()
 	leftTriggerPressed = false;
 	rightTriggerPressed = false;
 	aButtonPressed = false;
+	rightGripPressed = false;
+	leftGripPressed = false;
 	rightJoystickY = 0.0f;
 }
 
-bool VRInputHandler::IsLeftTriggerPressed() const
-{
-	return leftTriggerPressed;
-}
-
-bool VRInputHandler::IsRightTriggerPressed() const
-{
-	return rightTriggerPressed;
-}
-
-bool VRInputHandler::IsAButtonPressed() const
-{
-	return aButtonPressed;
-}
