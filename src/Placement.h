@@ -22,6 +22,10 @@ namespace Placement
         bool hasBaseline{ false };
         RE::NiPoint3 baselineLocal{}; 
 
+		float baseYaw{ 0.0f };
+		RE::NiPoint3 baseForward{};
+		RE::NiPoint3 baseUp{};
+
         // current (smoothed) preview transform applied to the object
         RE::NiPoint3 currentPreviewPos{};    // world position currently being applied
         float currentPreviewYaw{ 0.0f };     // yaw (radians) currently being applied
@@ -31,6 +35,9 @@ namespace Placement
 		// New: where is the mesh center relative to the ref origin in local coords
 		RE::NiPoint3 localCenterOffset{};
 		bool hasLocalCenterOffset{ false };
+
+		RE::NiPoint3 centerOffsetWorld{};
+		bool hasCenterOffsetWorld{ false };
 
         // smoothing factors (0..1). alpha per-frame lerp factor.
         // Recommended starting values: position 0.18, rotation 0.25 — tune as needed.
