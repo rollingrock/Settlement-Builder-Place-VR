@@ -1,5 +1,4 @@
 #include "Placement.h"
-
 #include "BoundsUtil.h"
 #include "InputBlocker.h"
 #include "RE/Skyrim.h"
@@ -92,7 +91,7 @@ namespace
 		};
 	}
 
-	// Simple linear interpolation
+	// simple linear interpolation
 	RE::NiPoint3 Lerp(const RE::NiPoint3& a, const RE::NiPoint3& b, float t)
 	{
 		return RE::NiPoint3{
@@ -102,7 +101,7 @@ namespace
 		};
 	}
 
-	// Mod event helper: used to signal Papyrus when preview placement is confirmed
+	// Mod event helper
 	void SendModEvent(std::string_view eventName,
 		std::string_view strArg = "",
 		float numArg = 0.0f,
@@ -111,9 +110,10 @@ namespace
 		SKSE::ModCallbackEvent e{ eventName.data(), strArg.data(), numArg, sender };
 		SKSE::GetModCallbackEventSource()->SendEvent(&e);
 	}
-	// Prefer a child NiNode whose subtree has geometry.
-	// Do NOT return NiGeometry as a pivot. If there are no child NiNodes with
-	// geometry, we return nullptr and treat the ref as a root-driven case.
+
+	// Pivot finder:
+	//  - Only returns NiNode children of the root whose subtree has geometry
+	//  - Never returns the root or NiGeometry directly.
 	RE::NiAVObject* FindPivotNode(RE::TESObjectREFR* ref)
 	{
 		if (!ref)
@@ -144,7 +144,6 @@ namespace
 			return false;
 		};
 
-		// Only consider NiNode children, skip pure geometries as pivot candidates.
 		for (auto& child : rootNode->children) {
 			if (!child)
 				continue;
@@ -152,7 +151,7 @@ namespace
 			auto* obj = child.get();
 			auto* node = obj->AsNode();
 			if (!node)
-				continue;  // geometry-only child; cannot be a pivot
+				continue;  // pure geometry; not a pivot candidate
 
 			auto* name = obj->name.c_str();
 			if (name &&
@@ -160,11 +159,10 @@ namespace
 				continue;
 
 			if (hasGeometryRecursive(node)) {
-				return node;  // NiNode pivot with geometry somewhere under it
+				return node;
 			}
 		}
 
-		// No suitable NiNode child with geometry found
 		return nullptr;
 	}
 }
@@ -172,7 +170,7 @@ namespace
 namespace Placement
 {
 	static PlacementState g_state;
-	constexpr float DISTANCE_STEP = 2.0f;  // units per frame per full axis
+	constexpr float DISTANCE_STEP = 2.0f;
 
 	class PlacementUpdateHandler :
 		public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -200,9 +198,8 @@ namespace Placement
 			bool rightGrip = input->IsRightGripPressed();
 			bool leftGrip = input->IsLeftGripPressed();
 
-			// Trigger-based rotation modes
 			if (rightGrip) {
-				// Pitch mode (right grip)
+				// pitch mode
 				if (input->IsLeftTriggerPressed()) {
 					g_state.previewPitch -= angleStep;
 				}
@@ -210,7 +207,7 @@ namespace Placement
 					g_state.previewPitch += angleStep;
 				}
 			} else if (leftGrip) {
-				// Roll mode (left grip)
+				// roll mode
 				if (input->IsLeftTriggerPressed()) {
 					g_state.previewRoll -= angleStep;
 				}
@@ -218,7 +215,7 @@ namespace Placement
 					g_state.previewRoll += angleStep;
 				}
 			} else {
-				// Default: yaw mode
+				// yaw mode
 				if (input->IsLeftTriggerPressed()) {
 					g_state.previewYaw -= angleStep;
 				}
@@ -227,7 +224,6 @@ namespace Placement
 				}
 			}
 
-			// Distance on right joystick Y
 			float joyY = input->GetRightJoystickY();
 			if (std::abs(joyY) > 0.1f) {
 				g_state.previewDistance += joyY * DISTANCE_STEP;
@@ -241,7 +237,6 @@ namespace Placement
 				g_state.previewRoll,
 				g_state.previewDistance);
 
-			// Confirm placement with A button: end preview & notify Papyrus.
 			if (input->IsAButtonPressed()) {
 				auto* ref = g_state.placedRef;
 				if (ref) {
@@ -258,7 +253,6 @@ namespace Placement
 			return RE::BSEventNotifyControl::kContinue;
 		}
 
-		// Per-frame placement update driven from VR input
 		void LivePlace(RE::TESObjectREFR* a_refr,
 			float yawOffset,
 			float pitchOffset,
@@ -270,31 +264,42 @@ namespace Placement
 				return;
 
 			// --- Position: wand + distance ---
+
 			auto* wandNode = player->RightWandNode.get();
 			const auto& wandTransform = wandNode->world;
 			const auto& wandPos = wandTransform.translate;
 
-			RE::NiPoint3 localForward{ 0.0f, 0.0f, -1.0f };
-			RE::NiPoint3 worldForward = wandTransform.rotate * localForward;
+			RE::NiPoint3 wandLocalForward{ 0.0f, 0.0f, -1.0f };
+			RE::NiPoint3 wandWorldForward = wandTransform.rotate * wandLocalForward;
 
-			RE::NiPoint3 targetCenter = wandPos + (worldForward * distance);
+			RE::NiPoint3 targetCenter = wandPos + (wandWorldForward * distance);
 			targetCenter.x += g_state.previewXoffset;
 			targetCenter.z += g_state.previewZoffset;
 
-			// --- Smooth preview center ---
 			g_state.currentPreviewPos =
 				Lerp(g_state.currentPreviewPos, targetCenter, g_state.positionSmoothAlpha);
 
 			RE::NiPoint3 appliedCenter = g_state.currentPreviewPos;
 
+			// --- Dynamic base frame: lock to player's yaw ---
+
+			float playerYaw = player->data.angle.z;  // radians
+			RE::NiPoint3 baseForward{
+				std::sin(playerYaw),
+				std::cos(playerYaw),
+				0.0f
+			};
+			baseForward = Normalize(baseForward);
+			RE::NiPoint3 baseUp{ 0.0f, 0.0f, 1.0f };
+			RE::NiPoint3 baseRight = Normalize(Cross(baseForward, baseUp));
+
 			if (g_state.useRootAngle) {
 				//
-				// Root-driven path (root-only geometry): use SetAngle on the ref
-				// and treat the preview center as the root position.
+				// Root-only geometry: drive orientation via SetAngle on the ref.
 				//
 				RE::NiPoint3 originPos = appliedCenter;
 
-				float yawWorld = g_state.baseYaw + yawOffset;  // face toward player + user yaw
+				float yawWorld = playerYaw + yawOffset;
 				float pitchWorld = pitchOffset;
 				float rollWorld = rollOffset;
 
@@ -304,19 +309,15 @@ namespace Placement
 							return;
 
 						a_refr->SetPosition(originPos);
-						// Skyrim: x = pitch, y = roll, z = yaw (radians)
+						// Skyrim: x = pitch, y = roll, z = yaw
 						a_refr->SetAngle(RE::NiPoint3{ pitchWorld, rollWorld, yawWorld });
 						a_refr->Update3DPosition(true);
 					});
 
 			} else {
 				//
-				// Child-pivot path: keep root unrotated and rotate the child pivot node.
+				// Child-pivot: keep root rotation unchanged and rotate pivot node only.
 				//
-				RE::NiPoint3 baseForward = Normalize(g_state.baseForward);
-				RE::NiPoint3 baseUp = Normalize(g_state.baseUp);
-				RE::NiPoint3 baseRight = Normalize(Cross(baseForward, baseUp));
-
 				// 1) Yaw around baseUp
 				Quaternion qYaw = MakeAxisAngle(baseUp, yawOffset);
 
@@ -335,12 +336,15 @@ namespace Placement
 				Quaternion qRoll = MakeAxisAngle(yawPitchForward, rollOffset);
 				Quaternion qOrient = Mul(qRoll, qYawPitch);
 
-				// Final basis from qOrient
+				// Final basis (only used for building a matrix; axis values not needed here)
 				RE::NiPoint3 forwardTilted = Normalize(Rotate(qOrient, baseForward));
 				RE::NiPoint3 upTilted = Normalize(Rotate(qOrient, baseUp));
 				RE::NiPoint3 rightTilted = Normalize(Cross(forwardTilted, upTilted));
 
-				// Compute ref origin so that pivot ends up at appliedCenter
+				(void)forwardTilted;
+				(void)upTilted;
+				(void)rightTilted;
+
 				RE::NiPoint3 originPos = appliedCenter;
 				if (g_state.hasPivot) {
 					originPos.x -= g_state.pivotOffsetWorld.x;
@@ -350,7 +354,6 @@ namespace Placement
 
 				RE::NiPointer<RE::NiAVObject> pivotNode = g_state.pivotNode;
 
-				// Capture qOrient's components into the task
 				float qW = qOrient.w;
 				float qX = qOrient.x;
 				float qY = qOrient.y;
@@ -361,12 +364,11 @@ namespace Placement
 						if (!a_refr)
 							return;
 
+						// Move the ref so pivot ends up at appliedCenter.
+						// Don't touch root rotation; game owns that.
 						a_refr->SetPosition(originPos);
-						// Root stays unrotated during preview; pivot node handles orientation.
-						a_refr->SetAngle(RE::NiPoint3{ 0.0f, 0.0f, 0.0f });
 
 						if (pivotNode) {
-							// Rebuild rotation matrix from captured quaternion
 							float w = qW;
 							float x = qX;
 							float y = qY;
@@ -395,7 +397,6 @@ namespace Placement
 							rel.entry[2][1] = 2.0f * (yz + wx);
 							rel.entry[2][2] = 1.0f - 2.0f * (xx + yy);
 
-							// final = rel * original (apply our rotation on top of original local)
 							RE::NiMatrix3 final = rel;
 							if (g_state.hasPivotOriginalRotate) {
 								RE::NiMatrix3 out{};
@@ -434,12 +435,12 @@ namespace Placement
 
 		auto bounds = BoundsUtil::GetApproxBounds(placedRef);
 
-		// ---- Decide pivot & whether we use root-driven or child-pivot-driven path ----
+		// Decide root-only vs child-pivot
 		RE::NiAVObject* root3D = placedRef->Get3D();
 		RE::NiAVObject* pivot = FindPivotNode(placedRef);
+
 		RE::NiPoint3 pivotWorld{};
 		RE::NiMatrix3 identity{};
-
 		identity.entry[0][0] = 1.0f;
 		identity.entry[1][1] = 1.0f;
 		identity.entry[2][2] = 1.0f;
@@ -452,7 +453,7 @@ namespace Placement
 		g_state.useRootAngle = false;
 
 		if (pivot) {
-			// Child-geometry case: we have a NiNode pivot under the root.
+			// child NiNode pivot under root
 			pivotWorld = pivot->world.translate;
 			g_state.pivotNode.reset(pivot);
 			g_state.hasPivot = true;
@@ -466,16 +467,13 @@ namespace Placement
 				pivotWorld.z - originWorld.z
 			};
 			g_state.useRootAngle = false;
-
 		} else {
-			// No NiNode pivot under the root => treat as root-only geometry.
-			// Use bounds center as our "pivot world" for base yaw etc.
+			// no NiNode pivot: treat as root-only geometry
 			pivotWorld = bounds.center;
 			g_state.useRootAngle = true;
-			// hasPivot stays false; pivotOffsetWorld unused in root-driven path.
 		}
 
-		// ---- Base frame: face the player horizontally from the pivot/center ----
+		// Initial base yaw from pivot to player (for initial facing)
 		RE::NiPoint3 playerPos = player->GetPosition();
 		RE::NiPoint3 toPlayer{
 			playerPos.x - pivotWorld.x,
@@ -498,7 +496,7 @@ namespace Placement
 		g_state.baseForward = RE::NiPoint3{ std::sin(baseYaw), std::cos(baseYaw), 0.0f };
 		g_state.baseUp = RE::NiPoint3{ 0.0f, 0.0f, 1.0f };
 
-		// ---- Initial preview center ----
+		// Initial preview center
 		auto* wandNode = player->RightWandNode.get();
 		auto& wandTransform = wandNode->world;
 		auto& wandPos = wandTransform.translate;
@@ -538,9 +536,6 @@ namespace Placement
 
 	void OnPlacementConfirmed(RE::TESObjectREFR* a_refr)
 	{
-		// Send preview ref to Papyrus as before; script will:
-		// 1) Spawn final ref.
-		// 2) Call ApplyPreviewTransforms(previewRef, finalRef).
 		SKSE::GetTaskInterface()->AddTask(
 			[a_refr] { SendModEvent("SBOnPlacementConfirmed", "Done", 0.0f, a_refr); });
 
@@ -561,7 +556,6 @@ namespace Placement
 		if (!previewRef || !finalRef)
 			return false;
 
-		// Make sure 3D is up to date
 		previewRef->Update3DPosition(true);
 		finalRef->Update3DPosition(true);
 
@@ -570,26 +564,17 @@ namespace Placement
 		if (!preview3D || !final3D)
 			return false;
 
-		auto* previewRoot = preview3D;
-		auto* finalRoot = final3D;
+		auto* previewPivot = FindPivotNode(previewRef);
+		auto* finalPivot = FindPivotNode(finalRef);
 
-		// Try to find a child pivot on both refs
-		auto* previewPivotCandidate = FindPivotNode(previewRef);
-		auto* finalPivotCandidate = FindPivotNode(finalRef);
-
-		bool childPivotPath = (previewPivotCandidate && finalPivotCandidate);
-
-		if (childPivotPath) {
-			// Child-pivot: keep root transforms as Papyrus set them;
-			// copy the pivot-node local rotation from preview to final.
-			finalPivotCandidate->local.rotate = previewPivotCandidate->local.rotate;
-
-			final3D->UpdateWorldData(nullptr);
+		if (previewPivot && finalPivot) {
+			// child-pivot case: copy pivot node's local rotation
+			finalPivot->local.rotate = previewPivot->local.rotate;
 			finalRef->Update3DPosition(true);
 			return true;
 		}
 
-		// Root-only geometry or no pivot: fallback to copying root transform.
+		// root-only / no pivot: copy root transform
 		finalRef->SetPosition(previewRef->GetPosition());
 		finalRef->SetAngle(previewRef->GetAngle());
 		finalRef->Update3DPosition(true);
