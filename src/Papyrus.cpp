@@ -4,15 +4,29 @@
 
 namespace Papyrus
 {
-	void LivePlace(RE::StaticFunctionTag*, RE::TESObjectREFR* a_refr, float faceRotation, float yMult, float zOffset, float xOffset)
+	void LivePlace(RE::StaticFunctionTag*,
+		RE::TESObjectREFR* a_refr,
+		float faceRotation,
+		float yMult,
+		float zOffset,
+		float xOffset)
 	{
 		if (!a_refr) {
-			// Handle null reference
 			return;
 		}
 
 		Placement::StartLivePlace(a_refr, faceRotation, yMult, zOffset, xOffset);
-		return;
+	}
+
+	bool ApplyPreviewTransforms(RE::StaticFunctionTag*,
+		RE::TESObjectREFR* previewRef,
+		RE::TESObjectREFR* finalRef)
+	{
+		if (!previewRef || !finalRef) {
+			return false;
+		}
+
+		return Placement::ApplyPreviewTransforms(previewRef, finalRef);
 	}
 
 	bool RegisterFuncs(RE::BSScript::IVirtualMachine* a_vm)
@@ -25,6 +39,7 @@ namespace Papyrus
 		logger::info("Registering Papyrus functions");
 
 		a_vm->RegisterFunction("LivePlace", "SBPlaceVR"sv, LivePlace);
+		a_vm->RegisterFunction("ApplyPreviewTransforms", "SBPlaceVR"sv, ApplyPreviewTransforms);
 
 		logger::info("Papyrus functions registered");
 		return true;
