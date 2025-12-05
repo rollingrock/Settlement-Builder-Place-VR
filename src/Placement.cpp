@@ -196,39 +196,41 @@ namespace Placement
 			constexpr float angleStep = 2.5f * std::numbers::pi_v<float> / 180.0f;
 
 			bool rightGrip = input->IsRightGripPressed();
-			bool leftGrip = input->IsLeftGripPressed();
+
+			// Check for rotation reset (both joystick buttons pressed)
+			if (input->IsLeftJoystickButtonPressed() && input->IsRightJoystickButtonPressed()) {
+				// Reset rotation to face player (yaw=0) with no pitch/roll
+				g_state.previewYaw = 0.0f;
+				g_state.previewPitch = 0.0f;
+				g_state.previewRoll = 0.0f;
+				// Distance is NOT reset
+				RE::DebugNotification("Rotation Reset");
+			}
 
 			if (rightGrip) {
-				// pitch mode
-				if (input->IsLeftTriggerPressed()) {
-					g_state.previewPitch -= angleStep;
+				// Right grip held: joystick Y controls pitch, distance disabled
+				float joyY = input->GetRightJoystickY();
+				if (std::abs(joyY) > 0.1f) {
+					// Pitch control via joystick (may need sensitivity adjustment)
+					g_state.previewPitch += joyY * angleStep * 1.5f;  // 2x sensitivity for joystick
 				}
-				if (input->IsRightTriggerPressed()) {
-					g_state.previewPitch += angleStep;
-				}
-			} else if (leftGrip) {
-				// roll mode
-				if (input->IsLeftTriggerPressed()) {
-					g_state.previewRoll -= angleStep;
-				}
-				if (input->IsRightTriggerPressed()) {
-					g_state.previewRoll += angleStep;
-				}
+				// Triggers do nothing when grip held
 			} else {
-				// yaw mode
+				// No grip held: triggers control yaw, joystick controls distance
 				if (input->IsLeftTriggerPressed()) {
 					g_state.previewYaw -= angleStep;
 				}
 				if (input->IsRightTriggerPressed()) {
 					g_state.previewYaw += angleStep;
 				}
-			}
 
-			float joyY = input->GetRightJoystickY();
-			if (std::abs(joyY) > 0.1f) {
-				g_state.previewDistance += joyY * DISTANCE_STEP;
-				g_state.previewDistance =
-					std::clamp(g_state.previewDistance, 50.0f, 3000.0f);
+				// Distance control via right joystick Y (only when grip NOT held)
+				float joyY = input->GetRightJoystickY();
+				if (std::abs(joyY) > 0.1f) {
+					g_state.previewDistance += joyY * DISTANCE_STEP;
+					g_state.previewDistance =
+						std::clamp(g_state.previewDistance, 50.0f, 3000.0f);
+				}
 			}
 
 			LivePlace(g_state.placedRef,
@@ -280,6 +282,17 @@ namespace Placement
 				Lerp(g_state.currentPreviewPos, targetCenter, g_state.positionSmoothAlpha);
 
 			RE::NiPoint3 appliedCenter = g_state.currentPreviewPos;
+
+			// Smooth rotation angles
+			float alpha = g_state.rotationSmoothAlpha;
+			g_state.currentYaw += (yawOffset - g_state.currentYaw) * alpha;
+			g_state.currentPitch += (pitchOffset - g_state.currentPitch) * alpha;
+			g_state.currentRoll += (rollOffset - g_state.currentRoll) * alpha;
+
+			// Use smoothed values for actual placement
+			yawOffset = g_state.currentYaw;
+			pitchOffset = g_state.currentPitch;
+			rollOffset = g_state.currentRoll;
 
 			// --- Dynamic base frame: lock to player's yaw ---
 
@@ -523,6 +536,11 @@ namespace Placement
 		g_state.previewDistance = startDist;
 
 		g_state.currentPreviewPos = initialCenter;
+
+		// Initialize smoothed rotation state
+		g_state.currentYaw = g_state.previewYaw;
+		g_state.currentPitch = g_state.previewPitch;
+		g_state.currentRoll = g_state.previewRoll;
 
 		if (auto* ui = RE::UI::GetSingleton()) {
 			ui->AddEventSink<RE::MenuOpenCloseEvent>(

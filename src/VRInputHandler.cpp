@@ -1,28 +1,21 @@
 #include "VRInputHandler.h"
 #include "SKSE/SKSE.h"
 
-constexpr int DEVICE_VR_RIGHT = 5;         
-constexpr int DEVICE_VR_LEFT = 6;          
-constexpr int BUTTON_LEFT_TRIGGER = 33;   
-constexpr int BUTTON_RIGHT_TRIGGER = 33;  
-constexpr int BUTTON_A = 7;              
+constexpr int DEVICE_VR_RIGHT = 5;
+constexpr int DEVICE_VR_LEFT = 6;
+constexpr int BUTTON_LEFT_TRIGGER = 33;
+constexpr int BUTTON_RIGHT_TRIGGER = 33;
+constexpr int BUTTON_A = 7;
 constexpr int BUTTON_RIGHT_GRIP = 2;
 constexpr int BUTTON_LEFT_GRIP = 2;
+constexpr int BUTTON_LEFT_JOYSTICK = 32;
+constexpr int BUTTON_RIGHT_JOYSTICK = 32;
 
 VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*)
 {
     for (auto input = *a_event; input; input = input->next) {
         if (input->eventType == RE::INPUT_EVENT_TYPE::kButton) {
             auto button = static_cast<RE::ButtonEvent*>(input);
-            // Log device, key code, and value
-            //logger::info(
-            //    "[VRInputLogger] Device: {}, IDCode: {}, Value: {}, Held: {}, IsDown: {}",
-            //    button->device.underlying(),
-            //    button->GetIDCode(),
-            //    button->Value(),
-            //    button->HeldDuration(),
-            //    button->IsHeld()
-            //);
 
 			// Left trigger
 			if (button->device.underlying() == DEVICE_VR_LEFT &&
@@ -57,13 +50,26 @@ VRInputHandler::EventResult VRInputHandler::ProcessEvent(RE::InputEvent* const* 
 				button->IsHeld()) {
 				leftGripPressed = true;
 			}
+
+		// Left joystick button
+		if (button->device.underlying() == DEVICE_VR_LEFT &&
+			button->GetIDCode() == BUTTON_LEFT_JOYSTICK &&
+			button->IsHeld()) {
+			leftJoystickButtonPressed = true;
+		}
+
+		// Right joystick button
+		if (button->device.underlying() == DEVICE_VR_RIGHT &&
+			button->GetIDCode() == BUTTON_RIGHT_JOYSTICK &&
+			button->IsHeld()) {
+			rightJoystickButtonPressed = true;
+		}
         }
 		// Detect thumbstick event for right wand
 		else if (input->eventType == RE::INPUT_EVENT_TYPE::kThumbstick) {
 			auto thumb = static_cast<RE::ThumbstickEvent*>(input);
 			if (thumb->device.underlying() == DEVICE_VR_RIGHT) {
-				rightJoystickY = thumb->yValue;  
-			//	logger::info("[VRInputLogger] Right Joystick Y Value: {}", thumb->yValue);
+				rightJoystickY = thumb->yValue;
 			}
 		}
     }
@@ -103,5 +109,7 @@ void VRInputHandler::Reset()
 	rightGripPressed = false;
 	leftGripPressed = false;
 	rightJoystickY = 0.0f;
+	leftJoystickButtonPressed = false;
+	rightJoystickButtonPressed = false;
 }
 

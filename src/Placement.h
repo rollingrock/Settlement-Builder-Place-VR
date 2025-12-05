@@ -15,6 +15,11 @@ namespace Placement
 		float previewRoll{ 0.0f };        // radians, user roll offset
 		float previewDistance{ 220.0f };  // desired distance from wand
 
+		// Smoothed rotation state
+		float currentYaw{ 0.0f };         // smoothed yaw being applied
+		float currentPitch{ 0.0f };       // smoothed pitch being applied
+		float currentRoll{ 0.0f };        // smoothed roll being applied
+
 		float previewXoffset{ 0.0f };  // world X offset from wand
 		float previewZoffset{ 0.0f };  // world Z offset from wand
 
@@ -39,6 +44,7 @@ namespace Placement
 
 		// Smoothing factors (0..1)
 		float positionSmoothAlpha{ 0.18f };
+		float rotationSmoothAlpha{ 0.25f };  // 0.25 = balanced smoothness
 	};
 
 	void StartLivePlace(RE::TESObjectREFR* placedRef,
