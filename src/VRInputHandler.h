@@ -10,12 +10,14 @@ public:
     using EventResult = RE::BSEventNotifyControl;
 
 	VRInputHandler() :
-		leftTriggerPressed(false), 
+		leftTriggerPressed(false),
 		rightTriggerPressed(false),
 		aButtonPressed(false),
 		rightGripPressed(false),
 		leftGripPressed(false),
-		rightJoystickY(0.0f)
+		rightJoystickY(0.0f),
+		leftJoystickButtonPressed(false),
+		rightJoystickButtonPressed(false)
 	{}
 
     EventResult ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
@@ -53,6 +55,16 @@ public:
 		return rightJoystickY;
 	}
 
+	inline bool IsLeftJoystickButtonPressed() const
+	{
+		return leftJoystickButtonPressed;
+	}
+
+	inline bool IsRightJoystickButtonPressed() const
+	{
+		return rightJoystickButtonPressed;
+	}
+
 	void Reset();
 
 private:
@@ -62,6 +74,8 @@ private:
 	std::atomic<bool> leftGripPressed;
 	std::atomic<bool> aButtonPressed;
 	std::atomic<float> rightJoystickY;
+	std::atomic<bool> leftJoystickButtonPressed;
+	std::atomic<bool> rightJoystickButtonPressed;
 
 
 };

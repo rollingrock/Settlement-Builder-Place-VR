@@ -4,3 +4,8 @@ vcpkg_installed
 *.zip
 .vs
 .vscode
+
+# Claude Code
+.claude/
+CLAUDE.md
+build-vr.bat
