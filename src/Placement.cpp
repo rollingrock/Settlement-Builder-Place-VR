@@ -197,14 +197,43 @@ namespace Placement
 
 			bool rightGrip = input->IsRightGripPressed();
 
-			// Check for rotation reset (both joystick buttons pressed)
-			if (input->IsLeftJoystickButtonPressed() && input->IsRightJoystickButtonPressed()) {
-				// Reset rotation to face player (yaw=0) with no pitch/roll
-				g_state.previewYaw = 0.0f;
-				g_state.previewPitch = 0.0f;
-				g_state.previewRoll = 0.0f;
-				// Distance is NOT reset
-				RE::DebugNotification("Rotation Reset");
+			// Check for rotation reset (both joystick buttons pressed with hold delay)
+			bool bothJoysticksPressed = input->IsLeftJoystickButtonPressed() &&
+			                             input->IsRightJoystickButtonPressed();
+
+			if (bothJoysticksPressed) {
+				if (!g_state.resetButtonsBeingHeld) {
+					// First frame of hold - start timer
+					g_state.resetButtonsFirstPressed = std::chrono::steady_clock::now();
+					g_state.resetButtonsBeingHeld = true;
+				} else {
+					// Check hold duration
+					auto now = std::chrono::steady_clock::now();
+					auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+						now - g_state.resetButtonsFirstPressed);
+
+					if (duration.count() >= g_state.resetHoldDurationMs) {
+						// Held long enough - trigger reset to initial rotation
+						if (g_state.hasInitialRotation) {
+							g_state.previewYaw = g_state.initialYaw;
+							g_state.previewPitch = g_state.initialPitch;
+							g_state.previewRoll = g_state.initialRoll;
+
+							// Reset smoothed values to avoid lag
+							g_state.currentYaw = g_state.initialYaw;
+							g_state.currentPitch = g_state.initialPitch;
+							g_state.currentRoll = g_state.initialRoll;
+
+							RE::DebugNotification("Rotation Reset to Initial");
+						}
+
+						// Reset hold state to prevent repeated resets
+						g_state.resetButtonsBeingHeld = false;
+					}
+				}
+			} else {
+				// Buttons released - reset hold state
+				g_state.resetButtonsBeingHeld = false;
 			}
 
 			if (rightGrip) {
@@ -294,63 +323,148 @@ namespace Placement
 			pitchOffset = g_state.currentPitch;
 			rollOffset = g_state.currentRoll;
 
-			// --- Dynamic base frame: lock to player's yaw ---
+			// --- Calculate base frame from wand yaw delta (wand-locked rotation) ---
+			// Extract yaw directly from wand's rotation matrix to avoid pitch/roll interference
+			// For ZYX euler decomposition: yaw = atan2(R[1][0], R[0][0])
+			// This gives us the rotation around the world Z axis, independent of pitch and roll
+			const auto& wandRot = wandTransform.rotate;
+			float currentWandYaw = std::atan2(wandRot.entry[1][0], wandRot.entry[0][0]);
 
-			float playerYaw = player->data.angle.z;  // radians
-			RE::NiPoint3 baseForward{
-				std::sin(playerYaw),
-				std::cos(playerYaw),
-				0.0f
-			};
+			// Calculate how much the wand has rotated horizontally since placement start
+			// Both root and pivot modes now use direct matrix manipulation (non-negated)
+			float wandYawDeltaRaw = currentWandYaw - g_state.initialWandYaw;
+			float wandYawDelta = wandYawDeltaRaw;
+
+			// Normalize the delta to handle angle wrapping (-π to π)
+			while (wandYawDelta > std::numbers::pi_v<float>)
+				wandYawDelta -= 2.0f * std::numbers::pi_v<float>;
+			while (wandYawDelta < -std::numbers::pi_v<float>)
+				wandYawDelta += 2.0f * std::numbers::pi_v<float>;
+
+			// Base orientation = initial wand yaw + wand rotation delta
+			// This ensures wand pitch/roll changes don't cause spinning
+			float baseYaw = g_state.initialWandYaw + wandYawDelta;
+
+
+			// Build base frame from this stable yaw
+			RE::NiPoint3 baseForward{ std::sin(baseYaw), std::cos(baseYaw), 0.0f };
 			baseForward = Normalize(baseForward);
 			RE::NiPoint3 baseUp{ 0.0f, 0.0f, 1.0f };
 			RE::NiPoint3 baseRight = Normalize(Cross(baseForward, baseUp));
 
 			if (g_state.useRootAngle) {
 				//
-				// Root-only geometry: drive orientation via SetAngle on the ref.
+				// Root-only geometry: try direct local.rotate manipulation like pivot case
+				// Hypothesis: Update3DPosition(true) was overwriting our rotation from stored angles
 				//
 				RE::NiPoint3 originPos = appliedCenter;
 
-				float yawWorld = playerYaw + yawOffset;
-				float pitchWorld = pitchOffset;
-				float rollWorld = rollOffset;
+				// Use world-aligned axes (same as pivot case)
+				RE::NiPoint3 worldForward{ 0.0f, 1.0f, 0.0f };
+				RE::NiPoint3 worldRight{ 1.0f, 0.0f, 0.0f };
 
-				SKSE::GetTaskInterface()->AddTask(
-					[a_refr, originPos, yawWorld, pitchWorld, rollWorld] {
-						if (!a_refr)
-							return;
-
-						a_refr->SetPosition(originPos);
-						// Skyrim: x = pitch, y = roll, z = yaw
-						a_refr->SetAngle(RE::NiPoint3{ pitchWorld, rollWorld, yawWorld });
-						a_refr->Update3DPosition(true);
-					});
-
-			} else {
-				//
-				// Child-pivot: keep root rotation unchanged and rotate pivot node only.
-				//
-				// 1) Yaw around baseUp
-				Quaternion qYaw = MakeAxisAngle(baseUp, yawOffset);
+				// 1) Yaw around baseUp (wand tracking + user adjustment)
+				Quaternion qYaw = MakeAxisAngle(baseUp, baseYaw + yawOffset);
 
 				// Axes after yaw
-				RE::NiPoint3 yawForward = Normalize(Rotate(qYaw, baseForward));
-				RE::NiPoint3 yawRight = Normalize(Rotate(qYaw, baseRight));
+				RE::NiPoint3 yawForward = Normalize(Rotate(qYaw, worldForward));
+				RE::NiPoint3 yawRight = Normalize(Rotate(qYaw, worldRight));
 
 				// 2) Pitch around right AFTER yaw
 				Quaternion qPitch = MakeAxisAngle(yawRight, pitchOffset);
 				Quaternion qYawPitch = Mul(qPitch, qYaw);
 
 				// Axes after yaw + pitch
-				RE::NiPoint3 yawPitchForward = Normalize(Rotate(qYawPitch, baseForward));
+				RE::NiPoint3 yawPitchForward = Normalize(Rotate(qYawPitch, worldForward));
+
+				// 3) Roll around forward AFTER yaw + pitch
+				Quaternion qRoll = MakeAxisAngle(yawPitchForward, rollOffset);
+				Quaternion qOrient = Mul(qRoll, qYawPitch);
+
+				float qW = qOrient.w;
+				float qX = qOrient.x;
+				float qY = qOrient.y;
+				float qZ = qOrient.z;
+
+				SKSE::GetTaskInterface()->AddTask(
+					[a_refr, originPos, qW, qX, qY, qZ] {
+						if (!a_refr)
+							return;
+
+						auto* root3D = a_refr->Get3D();
+						if (root3D) {
+							// Convert quaternion to rotation matrix
+							float w = qW, x = qX, y = qY, z = qZ;
+							float xx = x * x, yy = y * y, zz = z * z;
+							float xy = x * y, xz = x * z, yz = y * z;
+							float wx = w * x, wy = w * y, wz = w * z;
+
+							RE::NiMatrix3 rel{};
+							rel.entry[0][0] = 1.0f - 2.0f * (yy + zz);
+							rel.entry[0][1] = 2.0f * (xy - wz);
+							rel.entry[0][2] = 2.0f * (xz + wy);
+							rel.entry[1][0] = 2.0f * (xy + wz);
+							rel.entry[1][1] = 1.0f - 2.0f * (xx + zz);
+							rel.entry[1][2] = 2.0f * (yz - wx);
+							rel.entry[2][0] = 2.0f * (xz - wy);
+							rel.entry[2][1] = 2.0f * (yz + wx);
+							rel.entry[2][2] = 1.0f - 2.0f * (xx + yy);
+
+							RE::NiMatrix3 final = rel;
+
+							// Apply root's original rotation on top (like pivot case does)
+							if (g_state.hasRootOriginalLocalRotate) {
+								RE::NiMatrix3 out{};
+								for (int r = 0; r < 3; ++r) {
+									for (int c = 0; c < 3; ++c) {
+										out.entry[r][c] =
+											final.entry[r][0] * g_state.rootOriginalLocalRotate.entry[0][c] +
+											final.entry[r][1] * g_state.rootOriginalLocalRotate.entry[1][c] +
+											final.entry[r][2] * g_state.rootOriginalLocalRotate.entry[2][c];
+									}
+								}
+								final = out;
+							}
+
+							// Set both position and rotation directly on the scene graph node
+							root3D->local.translate = originPos;
+							root3D->local.rotate = final;
+
+							// Update scene graph to propagate local -> world transforms
+							// This avoids Update3DPosition which overwrites rotation from stored Euler angles
+							RE::NiUpdateData updateData;
+							root3D->Update(updateData);
+						}
+					});
+
+			} else {
+				//
+				// Child-pivot: keep root rotation unchanged and rotate pivot node only.
+				//
+				// Use world-aligned axes so baseYaw is applied via the quaternion, not the axes
+				RE::NiPoint3 worldForward{ 0.0f, 1.0f, 0.0f };
+				RE::NiPoint3 worldRight{ 1.0f, 0.0f, 0.0f };
+
+				// 1) Yaw around baseUp (wand tracking + user adjustment)
+				Quaternion qYaw = MakeAxisAngle(baseUp, baseYaw + yawOffset);
+
+				// Axes after yaw (using world axes as starting point)
+				RE::NiPoint3 yawForward = Normalize(Rotate(qYaw, worldForward));
+				RE::NiPoint3 yawRight = Normalize(Rotate(qYaw, worldRight));
+
+				// 2) Pitch around right AFTER yaw
+				Quaternion qPitch = MakeAxisAngle(yawRight, pitchOffset);
+				Quaternion qYawPitch = Mul(qPitch, qYaw);
+
+				// Axes after yaw + pitch
+				RE::NiPoint3 yawPitchForward = Normalize(Rotate(qYawPitch, worldForward));
 
 				// 3) Roll around forward AFTER yaw + pitch
 				Quaternion qRoll = MakeAxisAngle(yawPitchForward, rollOffset);
 				Quaternion qOrient = Mul(qRoll, qYawPitch);
 
 				// Final basis (only used for building a matrix; axis values not needed here)
-				RE::NiPoint3 forwardTilted = Normalize(Rotate(qOrient, baseForward));
+				RE::NiPoint3 forwardTilted = Normalize(Rotate(qOrient, worldForward));
 				RE::NiPoint3 upTilted = Normalize(Rotate(qOrient, baseUp));
 				RE::NiPoint3 rightTilted = Normalize(Cross(forwardTilted, upTilted));
 
@@ -411,14 +525,40 @@ namespace Placement
 							rel.entry[2][2] = 1.0f - 2.0f * (xx + yy);
 
 							RE::NiMatrix3 final = rel;
+
+							// Transform world rotation to root-local space
+							// localRot = inverse(rootWorld) * worldRot
+							// For rotation matrices, inverse = transpose
+							if (g_state.hasRootWorldRotate) {
+								RE::NiMatrix3 invRootWorld{};
+								// Transpose of rootWorldRotate
+								for (int r = 0; r < 3; ++r) {
+									for (int c = 0; c < 3; ++c) {
+										invRootWorld.entry[r][c] = g_state.rootWorldRotate.entry[c][r];
+									}
+								}
+								// Multiply: invRootWorld * rel
+								RE::NiMatrix3 localRot{};
+								for (int r = 0; r < 3; ++r) {
+									for (int c = 0; c < 3; ++c) {
+										localRot.entry[r][c] =
+											invRootWorld.entry[r][0] * rel.entry[0][c] +
+											invRootWorld.entry[r][1] * rel.entry[1][c] +
+											invRootWorld.entry[r][2] * rel.entry[2][c];
+									}
+								}
+								final = localRot;
+							}
+
+							// Apply pivot's original rotation on top
 							if (g_state.hasPivotOriginalRotate) {
 								RE::NiMatrix3 out{};
 								for (int r = 0; r < 3; ++r) {
 									for (int c = 0; c < 3; ++c) {
 										out.entry[r][c] =
-											rel.entry[r][0] * g_state.pivotOriginalRotate.entry[0][c] +
-											rel.entry[r][1] * g_state.pivotOriginalRotate.entry[1][c] +
-											rel.entry[r][2] * g_state.pivotOriginalRotate.entry[2][c];
+											final.entry[r][0] * g_state.pivotOriginalRotate.entry[0][c] +
+											final.entry[r][1] * g_state.pivotOriginalRotate.entry[1][c] +
+											final.entry[r][2] * g_state.pivotOriginalRotate.entry[2][c];
 									}
 								}
 								final = out;
@@ -462,6 +602,10 @@ namespace Placement
 		g_state.hasPivot = false;
 		g_state.pivotOriginalRotate = identity;
 		g_state.hasPivotOriginalRotate = false;
+		g_state.rootWorldRotate = identity;
+		g_state.hasRootWorldRotate = false;
+		g_state.rootOriginalLocalRotate = identity;
+		g_state.hasRootOriginalLocalRotate = false;
 		g_state.pivotOffsetWorld = RE::NiPoint3{};
 		g_state.useRootAngle = false;
 
@@ -472,6 +616,12 @@ namespace Placement
 			g_state.hasPivot = true;
 			g_state.pivotOriginalRotate = pivot->local.rotate;
 			g_state.hasPivotOriginalRotate = true;
+
+			// Capture root's world rotation for transforming world->local space
+			if (root3D) {
+				g_state.rootWorldRotate = root3D->world.rotate;
+				g_state.hasRootWorldRotate = true;
+			}
 
 			RE::NiPoint3 originWorld = placedRef->GetPosition();
 			g_state.pivotOffsetWorld = RE::NiPoint3{
@@ -484,37 +634,27 @@ namespace Placement
 			// no NiNode pivot: treat as root-only geometry
 			pivotWorld = bounds.center;
 			g_state.useRootAngle = true;
+
+			// Capture root's original local rotation for direct matrix manipulation
+			if (root3D) {
+				g_state.rootOriginalLocalRotate = root3D->local.rotate;
+				g_state.hasRootOriginalLocalRotate = true;
+			}
 		}
 
-		// Initial base yaw from pivot to player (for initial facing)
-		RE::NiPoint3 playerPos = player->GetPosition();
-		RE::NiPoint3 toPlayer{
-			playerPos.x - pivotWorld.x,
-			playerPos.y - pivotWorld.y,
-			0.0f
-		};
-
-		float len2 = toPlayer.x * toPlayer.x + toPlayer.y * toPlayer.y;
-		if (len2 < 1e-8f) {
-			toPlayer = RE::NiPoint3{ 0.0f, 1.0f, 0.0f };
-		} else {
-			float invLen = 1.0f / std::sqrt(len2);
-			toPlayer.x *= invLen;
-			toPlayer.y *= invLen;
-		}
-
-		float baseYaw = std::atan2(toPlayer.x, toPlayer.y);
-
-		g_state.baseYaw = baseYaw;
-		g_state.baseForward = RE::NiPoint3{ std::sin(baseYaw), std::cos(baseYaw), 0.0f };
-		g_state.baseUp = RE::NiPoint3{ 0.0f, 0.0f, 1.0f };
-
-		// Initial preview center
+		// Store initial wand orientation for rotation lock
 		auto* wandNode = player->RightWandNode.get();
 		auto& wandTransform = wandNode->world;
 		auto& wandPos = wandTransform.translate;
 		RE::NiPoint3 wandLocalForward{ 0.0f, 0.0f, -1.0f };
 		RE::NiPoint3 wandWorldForward = wandTransform.rotate * wandLocalForward;
+
+		// Extract initial yaw from rotation matrix (independent of pitch/roll)
+		// For ZYX euler decomposition: yaw = atan2(R[1][0], R[0][0])
+		const auto& wandRot = wandTransform.rotate;
+		g_state.initialWandYaw = std::atan2(wandRot.entry[1][0], wandRot.entry[0][0]);
+
+		// Initial preview center
 
 		float defaultDist =
 			bounds.radius > 0.0f ? bounds.radius * 2.0f : 200.0f;
@@ -541,6 +681,12 @@ namespace Placement
 		g_state.currentYaw = g_state.previewYaw;
 		g_state.currentPitch = g_state.previewPitch;
 		g_state.currentRoll = g_state.previewRoll;
+
+		// Store initial rotation for reset functionality
+		g_state.initialYaw = g_state.previewYaw;
+		g_state.initialPitch = g_state.previewPitch;
+		g_state.initialRoll = g_state.previewRoll;
+		g_state.hasInitialRotation = true;
 
 		if (auto* ui = RE::UI::GetSingleton()) {
 			ui->AddEventSink<RE::MenuOpenCloseEvent>(
@@ -574,9 +720,6 @@ namespace Placement
 		if (!previewRef || !finalRef)
 			return false;
 
-		previewRef->Update3DPosition(true);
-		finalRef->Update3DPosition(true);
-
 		auto* preview3D = previewRef->Get3D();
 		auto* final3D = finalRef->Get3D();
 		if (!preview3D || !final3D)
@@ -592,10 +735,15 @@ namespace Placement
 			return true;
 		}
 
-		// root-only / no pivot: copy root transform
-		finalRef->SetPosition(previewRef->GetPosition());
-		finalRef->SetAngle(previewRef->GetAngle());
-		finalRef->Update3DPosition(true);
+		// root-only / no pivot: copy transforms directly from scene graph
+		// We use local.translate/rotate because our placement code sets those directly
+		// and avoids Update3DPosition which would overwrite them from stale Euler angles
+		final3D->local.translate = preview3D->local.translate;
+		final3D->local.rotate = preview3D->local.rotate;
+
+		// Update scene graph to propagate local -> world
+		RE::NiUpdateData updateData;
+		final3D->Update(updateData);
 
 		return true;
 	}
